@@ -11,6 +11,7 @@ import { useSendTokensStore } from "src/stores/sendTokensStore";
 import { usePRStore } from "./payment-request";
 import { useWorkersStore } from "./workers";
 import { useInvoicesWorkerStore } from "./invoicesWorker";
+import { useCairoStore } from "./cairo";
 
 import * as _ from "underscore";
 import token from "src/js/token";
@@ -347,6 +348,40 @@ export const useWalletStore = defineStore("wallet", {
     getFeesForProofs: function (proofs: Proof[]): number {
       return this.wallet.getFeesForProofs(proofs);
     },
+    sendToCairoLock: async function (
+      proofs: WalletProof[],
+      wallet: CashuWallet,
+      amount: number,
+      cairoExecutable: string,
+      cairoExpectedOutput: bigint
+    ) {
+      const spendableProofs = this.spendableProofs(proofs, amount);
+      const proofsToSend = this.coinSelect(
+        spendableProofs,
+        wallet,
+        amount,
+        true
+      );
+      const keysetId = this.getKeyset(wallet.mint.mintUrl, wallet.unit);
+      const { keep: keepProofs, send: sendProofs } = await wallet.send(
+        amount,
+        proofsToSend,
+        {
+          keysetId,
+          cairoSend: {
+            executable: cairoExecutable.replaceAll(/\s+/g, ""),
+            expectedOutput: cairoExpectedOutput,
+          },
+        }
+      );
+      const proofsStore = useProofsStore();
+      await proofsStore.removeProofs(proofsToSend);
+      // note: we do not store sendProofs in the proofs store but
+      // expect from the caller to store it in the history
+      await proofsStore.addProofs(keepProofs);
+      return { keepProofs, sendProofs };
+    },
+    // send
     sendToLock: async function (
       proofs: WalletProof[],
       wallet: CashuWallet,
@@ -503,15 +538,27 @@ export const useWalletStore = defineStore("wallet", {
         const keysetId = this.getKeyset(historyToken.mint, historyToken.unit);
         const counter = this.keysetCounter(keysetId);
         const privkey = receiveStore.receiveData.p2pkPrivateKey;
+        const cairoExecutable = receiveStore.receiveData.cairoExecutable;
+        const cairoProgramInput = receiveStore.receiveData.cairoProgramInput;
         let proofs: Proof[];
         try {
+          const receiveOptions: any = {
+            counter,
+            privkey,
+            proofsWeHave: mintStore.mintUnitProofs(mint, historyToken.unit),
+          };
+
+          // Add Cairo receive options if Cairo data is provided
+          if (cairoExecutable && cairoExecutable.trim()) {
+            receiveOptions.cairoReceive = {
+              executable: cairoExecutable,
+              programInput: cairoProgramInput,
+            };
+          }
+
           proofs = await mintWallet.receive(
             receiveStore.receiveData.tokensBase64,
-            {
-              counter,
-              privkey,
-              proofsWeHave: mintStore.mintUnitProofs(mint, historyToken.unit),
-            }
+            receiveOptions
           );
           await proofsStore.addProofs(proofs);
           this.increaseKeysetCounter(keysetId, proofs.length);
@@ -522,6 +569,11 @@ export const useWalletStore = defineStore("wallet", {
         }
 
         p2pkStore.setPrivateKeyUsed(privkey);
+
+        // Clear Cairo data after successful reception
+        if (cairoExecutable && cairoExecutable.trim()) {
+          useCairoStore().clearCairoReceiveData();
+        }
 
         const outputAmount = proofs.reduce((s, t) => (s += t.amount), 0);
 

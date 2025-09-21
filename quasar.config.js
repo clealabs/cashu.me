@@ -55,6 +55,22 @@ module.exports = configure(function (/* ctx */) {
       },
 
       vueRouterMode: "history", // available values: 'hash', 'history'
+      extendViteConf(viteConf) {
+        // Merge instead of overwrite
+        viteConf.optimizeDeps ||= {};
+        const excluded = new Set(viteConf.optimizeDeps.exclude || []);
+        // Cover both names just in case
+        for (const dep of ["@cashu/cashu-ts", "cashu-ts"]) excluded.add(dep);
+        viteConf.optimizeDeps.exclude = Array.from(excluded);
+
+        // If you ever run SSR mode, also ensure it’s not externalized/pre-bundled there
+        viteConf.ssr ||= {};
+        viteConf.ssr.noExternal = [
+          ...(viteConf.ssr.noExternal || []),
+          "@cashu/cashu-ts",
+          "cashu-ts",
+        ];
+      },
       // vueRouterBase,
       // vueDevtools,
       // vueOptionsAPI: false,
@@ -83,6 +99,10 @@ module.exports = configure(function (/* ctx */) {
       https: true,
       open: true, // opens browser window automatically
       port: 8080,
+      headers: {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp",
+      },
     },
 
     // https://v2.quasar.dev/quasar-cli-vite/quasar-config-js#framework
@@ -124,7 +144,13 @@ module.exports = configure(function (/* ctx */) {
       // ssrPwaHtmlFilename: 'offline.html', // do NOT use index.html as name!
       // will mess up SSR
 
-      // extendSSRWebserverConf (esbuildConf) {},
+      extendSSRWebserverConf(esbuildConf) {
+        // Add cross-origin isolation headers for production
+        esbuildConf.headers = {
+          "Cross-Origin-Opener-Policy": "same-origin",
+          "Cross-Origin-Embedder-Policy": "require-corp",
+        };
+      },
       // extendPackageJson (json) {},
 
       pwa: false,
